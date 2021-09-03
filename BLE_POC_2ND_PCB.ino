@@ -4,10 +4,10 @@
 #include <mcp_can.h>
 #include <SPI.h>
 LiquidCrystal_I2C lcd(0x3F, 16, 2);
-SoftwareSerial bleSerial(A1, 4); // RX, TX
+SoftwareSerial bleSerial(4, A1); // RX, TX
 
 struct canMessage {
-  uint32_t id ;
+  uint16_t id ;
   byte data[8];
   uint8_t totalFrame;
   uint16_t timeInterval;
@@ -29,6 +29,14 @@ byte pke_clamp_state = 0x00;
 boolean NFC_driver_door_status = false;
 boolean NFC_co_driver_door_status = false;
 boolean NFC_engine_status = false;
+boolean ssbButtonStatus = false;
+boolean ignitionStatus = false;
+boolean crankStatus = false;
+boolean gearStatus = false;
+boolean ledState = false;
+boolean authFailState = false;
+byte blinkCount = 0;
+byte buttonPushCounter = 0;
 
 #define buzzerPin 9
 #define canIntrruptPin 3
@@ -37,34 +45,54 @@ boolean NFC_engine_status = false;
 #define ssbsw A1
 #define ignRel A2
 #define crankRel A3
-#define autoAuthFail 5000
-#define nfcCardPlacmentTime 3500
+#define autoAuthFail 40000
+#define nfcCardPlacmentTime 2000
 #define buzzerFreq 1000 //1kHz freq because crystal used in h/w is of 16MHz
+
+//All CAN Messages IDs
+#define GEAR_STATUS_ID                0x278
+#define PKE_CLAMP_STATE_OP_ID         0x353
+#define LATCH_STATUS_ID               0x214
+#define BREAK_STATUS_ID               0x127
+#define NFC_ENGINE_MODULE_ID          0x6EB
+#define NFC_DRIVER_DOOR_MODULE_ID     0X6E9
+#define NFC_CO_DRIVER_DOOR_MODULE_ID  0x6EA
+#define VEHICLE_SPEED_ID
+
+#define SEARCHCAR_ID                  0x0FE
+#define WINDOWUP_ID                   0x6E9
+#define WINDOWDOWN_ID                 0x6EB
+#define WIPEROPEN_ID                  0x182
+#define TRUNKOPEN_ID                  0x000
+#define SUNROOFOPEN_ID                0x633
+#define SUNROOFCLOSE_ID               0x633
+#define ACON_ID                       0x000
+#define ACOFF_ID                      0x000
+#define GATELOCK_ID                   0x0FE
+#define GATEUNLOCK_ID                 0x0FE
 
 char buffer[32];
 uint8_t charsRead;
 String btData = "0";
+float ssbPreviousVoltage = 5.0;
+float ssbCurrentVoltage  = 5.0;
 
 void setup() {
   //All CAN messages
-  SEARCHCAR       = {0xFE,  { 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00}, 3, 10   };
-  WINDOWUP        = {0x6E9, { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 10, 50   };
-  WINDOWDOWN      = {0x6EB, { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 10, 10   };
-  WIPEROPEN       = {0x182, { 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 10, 40   };
-  TRUNKOPEN       = {0x00,  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 1, 0   };
-  SUNROOFOPEN     = {0x633, { 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00}, 3, 10  };
-  SUNROOFCLOSE    = {0x633, { 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00}, 3, 10  };
-  ACON            = {0x00,  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 1, 0   };
-  ACOFF           = {0x00,  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 1, 0   };
-  GATELOCK        = {0xFE, { 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00}, 3, 10};  //XUV700
-  GATEUNLOCK      = {0xFE, { 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00}, 3, 10};  //XUV700
-  //  IGNON           = {0x6EB, { 0x2 , 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 1, 100 };
-  //  IGNOFF          = {0x6EB, { 0x3 , 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 1, 100 };
-  //  CRANKON          = {0x6EB, { 0x3 , 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 1, 100 };
-  //  CRANKOFF         = {0x6EB, { 0x3 , 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 1, 100 };
+  SEARCHCAR       = {SEARCHCAR_ID,    { 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00}, 03, 10 };
+  WINDOWUP        = {WINDOWUP_ID,     { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 10, 50 };
+  WINDOWDOWN      = {WINDOWDOWN_ID,   { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 10, 10 };
+  WIPEROPEN       = {WIPEROPEN_ID,    { 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 10, 40 };
+  TRUNKOPEN       = {TRUNKOPEN_ID,    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 01, 00 };
+  SUNROOFOPEN     = {SUNROOFOPEN_ID,  { 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00}, 03, 10 };
+  SUNROOFCLOSE    = {SUNROOFCLOSE_ID, { 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00}, 03, 10 };
+  ACON            = {ACON_ID,         { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 01, 00 };
+  ACOFF           = {ACOFF_ID,        { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 01, 00 };
+  GATELOCK        = {GATELOCK_ID,     { 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00}, 03, 10 };
+  GATEUNLOCK      = {GATEUNLOCK_ID,   { 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00}, 03, 10 };
 
   pinMode(buzzerPin, OUTPUT);
-  pinMode(ssbsw,INPUT);
+  pinMode(ssbsw, INPUT);
   pinMode(greenLED, OUTPUT);
   pinMode(redLED, OUTPUT);
 
@@ -97,18 +125,20 @@ void setup() {
   CAN0.init_Filt(0, 0, 0x06EA0000);              // Init first filter...//
   CAN0.init_Filt(1, 0, 0x06EB0000);              // Init Second filter...
   CAN0.init_Filt(2, 0, 0x06E90000);              // Init Second filter...
+  CAN0.init_Filt(3, 0, 0x02780000);
 
   CAN0.init_Mask(1, 0, 0x0FFF0000);              // Init second mask...
-  CAN0.init_Filt(3, 0, 0x02140000);
-  CAN0.init_Filt(4, 0, 0x01270000);
-  CAN0.init_Filt(5, 0, 0x03530000);
+  CAN0.init_Filt(4, 0, 0x02140000);
+  CAN0.init_Filt(5, 0, 0x01270000);
+  CAN0.init_Filt(6, 0, 0x03530000);
+
 
   CAN0.setMode(MCP_NORMAL); // Change to normal mode to allow messages to be transmitted
 
   lcd.init();
   lcd.home();
   lcd.backlight();
-  checkPCB();
+  //checkPCB();
 
   lcd.clear();
   lcd.setCursor(0, 0);
@@ -118,13 +148,17 @@ void setup() {
 void(* resetFunc) (void) = 0; //declare reset function @ address 0
 
 void loop() {
-
-  //Disabling authantication after autoAuthFail seconds.
-  //  currentMillis[0] = millis();
-  //  if (currentMillis[0] - previousMillis[0] >= autoAuthFail) {
-  //    nfc_auth = false;
-  //    previousMillis[0] = currentMillis[0];
-  //  }
+  //  Disabling authantication after autoAuthFail seconds.
+  if (nfc_auth) {
+    currentMillis[0] = millis();
+    if (currentMillis[0] - previousMillis[0] >= autoAuthFail) {
+      nfc_auth = false;
+      lcdWrite(" AUTH FAILED");
+      lcd.setCursor(0, 1);
+      lcd.print(" PLACE AGAIN TAG");
+      previousMillis[0] = currentMillis[0];
+    }
+  }
   // char msgString[128];
   //sprintf(msgString, "pke_clamp_sts: 0x%.2x nfc_auth_sts:%d latch_status:%d break_sts:%d NFC_engine_sts:%d NFC_driver_door_sts:%d NFC_co_driver_door_sts:%d", pke_clamp_state, nfc_auth, latch_status, break_status, NFC_engine_status, NFC_driver_door_status, NFC_co_driver_door_status);
   //Serial.println(msgString);
@@ -132,16 +166,87 @@ void loop() {
   if (!digitalRead(3)) {
     canRead();
   }
-  float ssbSwVoltage=(float) analogRead(ssbsw)*5.0/1023.0;
-  Serial.println(ssbSwVoltage);
-
-  if(ssbSwVoltage>1.8 && ssbSwVoltage < 2.8){
-    digitalWrite(redLED,LOW);
-    digitalWrite(greenLED,HIGH);
+  if (ssbPreviousVoltage != ssbCurrentVoltage) {
+    ssbPreviousVoltage = ssbCurrentVoltage = (float) analogRead(ssbsw) * 5.0 / 1023.0;
   }
-  else{
-   digitalWrite(redLED,HIGH);
-   digitalWrite(greenLED,LOW);
+  ssbCurrentVoltage = (float) analogRead(ssbsw) * 5.0 / 1023.0;
+  if ((ssbPreviousVoltage - ssbCurrentVoltage) > 2) {
+    Serial.print(ssbCurrentVoltage);
+    Serial.print(" buttonPushCounter");
+    buttonPushCounter++;
+    Serial.println(buttonPushCounter);
+    if (nfc_auth && !ignitionStatus && !crankStatus) {
+      digitalWrite(redLED, HIGH);
+      lcdWrite("  IGNITION ON   ");
+      digitalWrite(ignRel, HIGH);
+      ignitionStatus = true;
+      if (break_status && !crankStatus && gearStatus) {
+        crank();
+      }
+      return;
+    }
+    if (ignitionStatus && crankStatus) {
+      digitalWrite(redLED, LOW);
+      digitalWrite(greenLED, LOW);
+      digitalWrite(crankRel, LOW);
+      digitalWrite(ignRel, LOW);
+      lcdWrite("   ENGINE OFF   ");
+      ignitionStatus=false;
+      crankStatus = false;
+      nfc_auth=false;
+      return;
+    }
+    if (ignitionStatus && break_status && gearStatus) {
+      crank();
+      return;
+    }
+    if (ignitionStatus) {
+      digitalWrite(redLED, LOW);
+      digitalWrite(greenLED, LOW);
+      lcdWrite("  IGNITION OFF   ");
+      digitalWrite(ignRel, LOW);
+      ignitionStatus = false;
+      return;
+    }
+    if (!nfc_auth && !ignitionStatus) {
+      lcdWrite(" PLACE NFC CARD");
+      lcd.setCursor(0, 1);
+      lcd.print(" AGAIN FOR AUTH");
+      authFailState = true;
+      blinkCount = 0;
+    }
+    ssbPreviousVoltage = ssbCurrentVoltage;
+  }
+
+  if (ignitionStatus && !crankStatus) {
+    digitalWrite(greenLED, break_status);
+  }
+
+  if (authFailState && !ignitionStatus ) {
+    currentMillis[4] = millis();
+    if (currentMillis[4] - previousMillis[4] >= 200) {
+      previousMillis[4] = currentMillis[4];
+      if (ledState == LOW) {
+        ledState = HIGH;
+        blinkCount++;
+      } else {
+        ledState = LOW;
+      }
+      digitalWrite(redLED, ledState);
+    }
+    if (blinkCount == 10) {
+      authFailState = false;
+      digitalWrite(redLED, LOW);
+    }
+  }
+  //do something on multiple press of buttons
+  if (buttonPushCounter > 2 && nfc_auth && gearStatus && !ignitionStatus && !crankStatus) {
+    digitalWrite(redLED, HIGH);
+    lcdWrite("  IGNITION ON   ");
+    digitalWrite(ignRel, HIGH);
+    ignitionStatus = true;
+    crank();
+    buttonPushCounter = 0;
   }
 }
 
@@ -225,18 +330,9 @@ void bt_comm() {
   }
 }
 void checkPCB() {
-  lcd.setCursor(0, 0);
-  lcd.print("CHECKING PCB...");
-  delay(10);
-
-  lcd.setCursor(0, 1);
-  lcd.print("                ");
   tone(buzzerPin, buzzerFreq); // Send 1KHz sound signal...
-  lcd.setCursor(0, 1);
-  lcd.print("BUZZER OK!");
-  delay(100);           // ...for 0.5 sec
+  delay(200);           // ...for 0.5 sec
   noTone(buzzerPin);     // Stop sound...
-  delay(100);
 }
 void canWrite(canMessage message, String strAck) {
   // send data:  to given ID, Standard CAN Frame, Data length = 8 bytes, 'data' = array of data bytes to send
@@ -261,16 +357,8 @@ void canWrite(canMessage message, String strAck) {
   else {
     bleSerial.print("ackerror");
     Serial.println("ackerror");
-
-    CAN0.begin(MCP_STDEXT, CAN_500KBPS, MCP_8MHZ);
-    CAN0.init_Mask(0, 0, 0x03FF0000);              // Init first mask...all filter bit enable
-    CAN0.init_Filt(0, 0, 0x06EA0000);              // Init first filter...
-    CAN0.init_Mask(1, 0, 0x03FF0000);              // Init second mask...
-    CAN0.init_Filt(1, 0, 0x06EB0000);              // Init Second filter...
-    CAN0.init_Filt(2, 0, 0x06E90000);              // Init Second filter...
-
-    CAN0.setMode(MCP_NORMAL); // Change to normal mode to allow messages to be transmitted
-    delay(400);
+    delay(100);
+    resetFunc();
   }
 
 }
@@ -292,48 +380,42 @@ void canRead() {
   Serial.println();
 
   switch (rxId) {
-    case 0x353://PKE Clamp state op
+    case PKE_CLAMP_STATE_OP_ID://PKE Clamp state op
       pke_clamp_state = rxBuf[0];
       break;
-    case 0x214://MBFM Latch status
+    case LATCH_STATUS_ID://MBFM Latch status
       if (rxBuf[5] == 0x40)
         latch_status = true;
       else
         latch_status = false;
       break;
-    case 0x127://EMS break status
+    case BREAK_STATUS_ID://EMS break status
       if (rxBuf[3] == 0x08)
         break_status = true;
       else
         break_status = false;
       break;
-    case 0x6EB://CAN ID = 0x6EB for Engine Ignition.
+    case GEAR_STATUS_ID://Gear Status
+      if (rxBuf[2] == 0x09)
+        gearStatus = true;
+      else
+        gearStatus = false;
+      break;
+    case NFC_ENGINE_MODULE_ID://CAN ID = 0x6EB for Engine Ignition.
       if (rxBuf[0] == 0x03) {
         currentMillis[3] = millis();
-        if (currentMillis[3] - previousMillis[3] <= nfcCardPlacmentTime) {
-          Serial.println("returning from ign handlling");
+        if (currentMillis[3] - previousMillis[3] <= 500) {
+          Serial.println("returning from authentication");
           return;
         }
+        previousMillis[0]=millis();
         previousMillis[3] = currentMillis[3];
-        nfc_auth = !nfc_auth;
-        if (nfc_auth) {
-          lcdWrite("  IGNITION ON   ");
-          digitalWrite(ignRel, HIGH);
-          if (break_status) {
-            digitalWrite(crankRel, HIGH);
-            lcdWrite("  CRANK ON  ");
-            break_status=false;
-          }
-        }
-        if (!nfc_auth) {
-          lcdWrite("  IGNITION OFF ");
-          digitalWrite(crankRel, LOW);
-          digitalWrite(ignRel, LOW);
-          break_status=false;
-        }
+        nfc_auth = true;
+        buttonPushCounter = 0;
+        lcdWrite(" AUTHENTICATED");
       }
       break;
-    case 0x6EA://CAN ID = 0x6EA for co driver side door access.
+    case NFC_CO_DRIVER_DOOR_MODULE_ID://CAN ID = 0x6EA for co driver side door access.
       if (rxBuf[0] == 0x03) {
         currentMillis[2] = millis();
         if (currentMillis[2] - previousMillis[2] <= nfcCardPlacmentTime) {
@@ -354,7 +436,7 @@ void canRead() {
         }
       }
       break;
-    case 0x6E9://CAN ID = 0X6E9 for driver side door access.
+    case NFC_DRIVER_DOOR_MODULE_ID://CAN ID = 0X6E9 for driver side door access.
       if (rxBuf[0] == 0x03) {
         currentMillis[1] = millis();
         if (currentMillis[1] - previousMillis[1] <= nfcCardPlacmentTime) {
@@ -383,20 +465,14 @@ void canRead() {
   for (int i = 0; i < 8; i++)
     rxBuf[i] = 0x00;
 }
-void messgeHandle() {
-  //  boolean latch_status = false;
-  //  boolean break_status = false;
-  //  boolean nfc_auth = false;
-  //  byte pke_clamp_state = 0x00;
-  //  boolean NFC_driver_door_status = false;
-  //  boolean NFC_co_driver_door_status = false;
-  //  boolean NFC_engine_status = false;
-  currentMillis[3] = millis();
-  if (currentMillis[3] - previousMillis[3] <= autoAuthFail) {
-    Serial.println("returning from ign handlling");
-    return;
-  }
-  previousMillis[3] = currentMillis[3];
-
-
+void crank() {
+  digitalWrite(redLED, LOW);
+  digitalWrite(greenLED, HIGH);
+  delay(1000);
+  digitalWrite(crankRel, HIGH);
+  crankStatus = true;
+  lcdWrite("  CRANK ON  ");
+  delay(3000);
+  digitalWrite(crankRel, LOW);
+  lcdWrite("  CRANK OFF  ");
 }
