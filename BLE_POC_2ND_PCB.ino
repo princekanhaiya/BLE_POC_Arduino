@@ -35,6 +35,7 @@ boolean crankStatus = false;
 boolean gearStatus = false;
 boolean ledState = false;
 boolean authFailState = false;
+boolean speedStatus=false;
 byte blinkCount = 0;
 byte buttonPushCounter = 0;
 
@@ -57,7 +58,7 @@ byte buttonPushCounter = 0;
 #define NFC_ENGINE_MODULE_ID          0x6EB
 #define NFC_DRIVER_DOOR_MODULE_ID     0X6E9
 #define NFC_CO_DRIVER_DOOR_MODULE_ID  0x6EA
-#define VEHICLE_SPEED_ID
+#define VEHICLE_SPEED_ID              0x124
 
 #define SEARCHCAR_ID                  0x0FE
 #define WINDOWUP_ID                   0x6E9
@@ -127,10 +128,11 @@ void setup() {
   CAN0.init_Filt(2, 0, 0x06E90000);              // Init Second filter...
   CAN0.init_Filt(3, 0, 0x02780000);
 
-  CAN0.init_Mask(1, 0, 0x0FFF0000);              // Init second mask...
+  //CAN0.init_Mask(1, 0, 0x0FFF0000);              // Init second mask...
   CAN0.init_Filt(4, 0, 0x02140000);
   CAN0.init_Filt(5, 0, 0x01270000);
   CAN0.init_Filt(6, 0, 0x03530000);
+  CAN0.init_Filt(7, 0, 0x01240000);
 
 
   CAN0.setMode(MCP_NORMAL); // Change to normal mode to allow messages to be transmitted
@@ -191,9 +193,9 @@ void loop() {
       digitalWrite(crankRel, LOW);
       digitalWrite(ignRel, LOW);
       lcdWrite("   ENGINE OFF   ");
-      ignitionStatus=false;
+      ignitionStatus = false;
       crankStatus = false;
-      nfc_auth=false;
+      nfc_auth = false;
       return;
     }
     if (ignitionStatus && break_status && gearStatus) {
@@ -247,6 +249,10 @@ void loop() {
     ignitionStatus = true;
     crank();
     buttonPushCounter = 0;
+  }
+
+  if(speedStatus){
+    digitalWrite(greenLED,LOW);
   }
 }
 
@@ -401,6 +407,12 @@ void canRead() {
       else
         gearStatus = false;
       break;
+    case VEHICLE_SPEED_ID://Gear Status
+      if (rxBuf[1] == 0x32 && rxBuf[2] == 0x00 )
+        speedStatus = true;
+      else
+        speedStatus = false;
+      break;
     case NFC_ENGINE_MODULE_ID://CAN ID = 0x6EB for Engine Ignition.
       if (rxBuf[0] == 0x03) {
         currentMillis[3] = millis();
@@ -408,7 +420,7 @@ void canRead() {
           Serial.println("returning from authentication");
           return;
         }
-        previousMillis[0]=millis();
+        previousMillis[0] = millis();
         previousMillis[3] = currentMillis[3];
         nfc_auth = true;
         buttonPushCounter = 0;
@@ -431,7 +443,7 @@ void canRead() {
         }
         if (!NFC_driver_door_status) {
           Serial.println("Driver door close");
-          canWrite(GATEUNLOCK, "gateclose");
+          canWrite(GATELOCK, "gateclose");
           lcdWrite(" GATE LOCKED  ");
         }
       }
@@ -452,7 +464,7 @@ void canRead() {
         }
         if (!NFC_driver_door_status) {
           Serial.println("Driver door close");
-          canWrite(GATEUNLOCK, "gateclose");
+          canWrite(GATELOCK, "gateclose");
           lcdWrite(" GATE LOCKED  ");
         }
       }
