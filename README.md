@@ -10,7 +10,3 @@ This project details the firmware development for mobile as key based on bluetoo
 ## System Architecture
 - This project consist of firmware devlopment of mobile as a key hardware
 <img align="center" src="https://embed.creately.com/ifl0veQZlHz?type=svg">
-
-
-
-
